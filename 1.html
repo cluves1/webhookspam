@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webhook ツール - 画像アップロード & Captain Hook対応（日本語版）</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f0f2f5; color: #333; }
+        h1 { color: #36393f; text-align: center; }
+        .warning { background: #fff3cd; color: #856404; padding: 15px; border-radius: 8px; margin: 20px 0; border: 1px solid #ffeeba; }
+        label { display: block; margin: 15px 0 5px; font-weight: bold; }
+        input[type="text"], input[type="file"], textarea { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+        button { padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; margin: 10px 5px 0 0; }
+        #sendBtn { background: #43b581; color: white; }
+        #changeBtn { background: #5865f2; color: white; }
+        #disableBtn { background: #f04747; color: white; }
+        button:hover { opacity: 0.9; }
+        .section { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 30px; }
+        .form { margin-top: 15px; }
+        #result { margin-top: 20px; padding: 15px; border-radius: 6px; font-weight: bold; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .hidden { display: none; }
+        #preview { max-width: 150px; margin-top: 10px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <h1>Webhook 送信・編集・削除ツール</h1>
+    
+    <div class="warning">
+        ⚠️ Discord WebhookはURL知ってるだけで編集/削除可能。テスト用に使い、悪用厳禁！<br>
+        画像はPNG/JPG/GIF推奨（サイズ小さめがおすすめ）。
+    </div>
+    
+    <label for="webhookUrl">Webhook URL:</label>
+    <input type="text" id="webhookUrl" placeholder="https://discord.com/api/webhooks/..." required autofocus>
+    
+    <!-- デフォルト名前 & アイコン変更（ファイルアップロード対応） -->
+    <div class="section">
+        <h2>Webhookのデフォルト名前 & アイコン変更</h2>
+        <p>ここで変更すると永久的に反映（ファイルからBase64変換して設定）。</p>
+        <input type="text" id="defaultName" placeholder="新しい名前（例: Captain Hook）">
+        <label for="avatarFile">アイコン画像を選択（ファイルから）:</label>
+        <input type="file" id="avatarFile" accept="image/*">
+        <img id="preview" src="" alt="プレビュー">
+        <button id="changeBtn">名前 & アイコンを適用</button>
+    </div>
+    
+    <div class="section">
+        <h2>① メッセージ送信（カスタム名前/アイコンURL対応）</h2>
+        <button onclick="toggleForm('sender')">Senderを開く / 閉じる</button>
+        <div id="sender" class="form hidden">
+            <input type="text" id="customName" placeholder="このメッセージだけの名前（任意: Captain Hook）">
+            <input type="text" id="customAvatar" placeholder="このメッセージだけのアイコンURL（http/httpsのみ）">
+            <textarea id="senderMessage" placeholder="送信メッセージ..."></textarea>
+            <button id="sendBtn">送信する</button>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>② Webhook完全削除</h2>
+        <p>押すと自動で「THIS WEBHOOK IS DELETED FIRE! (*^^)v」を送って即削除。</p>
+        <button onclick="toggleForm('disabler')">Disablerを開く / 閉じる</button>
+        <div id="disabler" class="form hidden">
+            <button id="disableBtn">削除実行（確認後）</button>
+        </div>
+    </div>
+    
+    <div id="result"></div>
+
+    <script>
+        const webhookInput = document.getElementById('webhookUrl');
+        const result = document.getElementById('result');
+        const avatarFile = document.getElementById('avatarFile');
+        const preview = document.getElementById('preview');
+
+        function showResult(text, type = 'info') {
+            result.textContent = text;
+            result.className = type === 'success' ? 'success' : type === 'error' ? 'error' : '';
+        }
+
+        function toggleForm(type) {
+            document.getElementById(type).classList.toggle('hidden');
+        }
+
+        // 画像プレビュー & Base64変換
+        avatarFile.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                preview.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // デフォルト変更 (PATCH with Base64)
+        document.getElementById('changeBtn').addEventListener('click', async () => {
+            const url = webhookInput.value.trim();
+            const name = document.getElementById('defaultName').value.trim();
+            const file = avatarFile.files[0];
+
+            if (!url) return showResult('Webhook URLを入力してください。', 'error');
+            if (!name && !file) return showResult('名前か画像を指定してください。', 'error');
+
+            const body = {};
+            if (name) body.name = name;
+
+            if (file) {
+                const base64 = await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.readAsDataURL(file);
+                });
+                body.avatar = base64;  // data:image/...;base64,... の形式でOK
+            }
+
+            if (!confirm('デフォルトを変更しますか？')) return;
+
+            try {
+                const res = await fetch(url, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (res.ok || res.status === 204) {
+                    showResult('デフォルト変更成功！（Captain Hookみたいになった？）', 'success');
+                } else {
+                    const errText = await res.text();
+                    showResult(`失敗: ${res.status} - ${errText}`, 'error');
+                }
+            } catch (err) {
+                showResult('エラー: ' + err.message, 'error');
+            }
+        });
+
+        // メッセージ送信
+        document.getElementById('sendBtn').addEventListener('click', async () => {
+            const url = webhookInput.value.trim();
+            const msg = document.getElementById('senderMessage').value.trim();
+            const customName = document.getElementById('customName').value.trim();
+            const customAvatar = document.getElementById('customAvatar').value.trim();
+
+            if (!url || !msg) return showResult('URLとメッセージを入力してください。', 'error');
+
+            const body = { content: msg };
+            if (customName) body.username = customName;
+            if (customAvatar) body.avatar_url = customAvatar;  // URLのみ
+
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (res.ok) {
+                    showResult('送信成功！', 'success');
+                } else {
+                    showResult(`失敗: ${res.status}`, 'error');
+                }
+            } catch (err) {
+                showResult('エラー: ' + err.message, 'error');
+            }
+        });
+
+        // 削除（固定メッセージ）
+        document.getElementById('disableBtn').addEventListener('click', async () => {
+            const url = webhookInput.value.trim();
+            if (!url) return showResult('Webhook URLを入力してください。', 'error');
+            if (!confirm('本当に削除しますか？\n「THIS WEBHOOK IS DELETED FIRE! (*^^)v」を送って即消えます！')) return;
+
+            try {
+                // 最後のメッセージ送信
+                await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: 'THIS WEBHOOK IS DELETED FIRE! (*^^)v' })
+                });
+
+                // DELETE
+                const deleteRes = await fetch(url, { method: 'DELETE' });
+                if (deleteRes.ok || deleteRes.status === 204) {
+                    showResult('Webhook削除成功！ これで完全に消えました🔥', 'success');
+                    webhookInput.value = '';
+                    webhookInput.disabled = true;
+                    document.querySelectorAll('button, input').forEach(el => el.disabled = true);
+                } else {
+                    showResult(`削除失敗: ${deleteRes.status}`, 'error');
+                }
+            } catch (err) {
+                showResult('エラー: ' + err.message, 'error');
+            }
+        });
+    </script>
+</body>
+</html>
